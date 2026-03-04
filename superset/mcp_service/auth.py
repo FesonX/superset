@@ -16,11 +16,14 @@
 # under the License.
 
 """
-Minimal authentication hooks for MCP tools.
-This is a placeholder implementation that provides basic user context.
+Authentication hooks for MCP tools.
+
+Provides user context for MCP tool execution via:
+- Preset workspace middleware (sets g.user externally)
+- FastMCP access token claims (GoogleProvider OAuth2 flow)
+- MCP_DEV_USERNAME config fallback (development/testing)
 
 Future enhancements (to be added in separate PRs):
-- JWT token authentication and validation
 - User impersonation support
 - Permission checking with scopes
 - Comprehensive audit logging
@@ -93,7 +96,8 @@ def get_user_from_request() -> User:
 
     Priority order:
     1. g.user if already set (by Preset workspace middleware)
-    2. MCP_DEV_USERNAME from configuration (for development/testing)
+    2. FastMCP access token claims (e.g., from GoogleProvider OAuth2 flow)
+    3. MCP_DEV_USERNAME from configuration (for development/testing)
 
     Returns:
         User object with roles and groups eagerly loaded
@@ -103,9 +107,64 @@ def get_user_from_request() -> User:
     """
     from flask import current_app
 
-    # First check if user is already set by Preset workspace middleware
+    # First check if user is already set by Preset workspace middleware.
+    # Guard against detached instances: if the SQLAlchemy session was removed
+    # (e.g., by _cleanup_session_on_error), g.user still holds a reference to
+    # the now-detached object. Returning it would cause DetachedInstanceError
+    # when any relationship (e.g. roles) is accessed later.
     if hasattr(g, "user") and g.user:
-        return g.user
+        try:
+            from sqlalchemy import inspect as sa_inspect
+            from sqlalchemy.orm.exc import DetachedInstanceError
+
+            if not sa_inspect(g.user).detached:
+                return g.user
+            logger.debug("g.user is detached from session, reloading")
+            g.user = None
+        except DetachedInstanceError:
+            g.user = None
+        except Exception:
+            g.user = None
+
+    # Try to extract user from FastMCP access token (e.g., via GoogleProvider)
+    try:
+        from fastmcp.server.dependencies import get_access_token
+
+        access_token = get_access_token()
+        if access_token:
+            claims = getattr(access_token, "claims", {}) or {}
+            email = claims.get("email")
+            sub = claims.get("sub") or getattr(access_token, "client_id", None)
+
+            user = None
+            if email:
+                user = load_user_with_relationships(email=email)
+            if not user and sub:
+                user = load_user_with_relationships(username=sub)
+
+            if user:
+                g.user = user
+                logger.debug("MCP user resolved from access token: %s", user.username)
+                return user
+            logger.debug(
+                "Access token valid but user not found in Superset. "
+                "email_present=%s, sub_present=%s. "
+                "Ensure the user has logged in to Superset at least once.",
+                bool(email),
+                bool(sub),
+            )
+            raise ValueError(
+                "Access token valid but user not found in Superset. "
+                "Ensure the user has logged in to Superset at least once."
+            )
+    except ImportError:
+        pass  # fastmcp not available or old version without get_access_token
+    except RuntimeError:
+        pass  # No active async context (e.g., during startup or stdio mode)
+    except ValueError:
+        raise
+    except Exception:
+        logger.debug("Unexpected error resolving user from access token", exc_info=True)
 
     # Fall back to configured username for development/single-user deployments
     username = current_app.config.get("MCP_DEV_USERNAME")
@@ -205,6 +264,8 @@ def _setup_user_context() -> User | None:
 
 def _cleanup_session_on_error() -> None:
     """Clean up database session after an exception."""
+    from flask import has_app_context
+
     from superset.extensions import db
 
     # pylint: disable=consider-using-transaction
@@ -213,6 +274,14 @@ def _cleanup_session_on_error() -> None:
         db.session.remove()
     except Exception as e:
         logger.warning("Error cleaning up session after exception: %s", e)
+
+    # Clear the cached user — after session removal it is detached.
+    # The next tool call must reload it from a fresh session.
+    try:
+        if has_app_context() and hasattr(g, "user"):
+            g.user = None
+    except Exception as e:
+        logger.warning("Error clearing g.user during session cleanup: %s", e)
 
 
 def mcp_auth_hook(tool_func: F) -> F:  # noqa: C901

@@ -98,6 +98,10 @@ services:
       - ${SUPERSET_PORT:-8088}:8088
       # When in cypress-mode ->
       - ${CYPRESS_PORT:-8081}:8081
+      # MCP service (Phase 1b)
+      - ${MCP_PORT:-5008}:5008
+      # MCP hybrid test port (test DB, no restart of main MCP needed)
+      - 5009:5009
     extra_hosts:
       - "host.docker.internal:host-gateway"
     user: *superset-user
