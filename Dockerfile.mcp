@@ -1,0 +1,54 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# MCP service image — Superset lean base + fastmcp.
+#
+# Build (two steps):
+#
+#   # 1. Build the lean base from the main Dockerfile
+#   docker build --target lean -t superset:lean-<sha> .
+#
+#   # 2. Build the MCP image on top
+#   docker build -f Dockerfile.mcp \
+#     --build-arg LEAN_IMAGE=superset:lean-<sha> \
+#     -t superset:mcp-<sha> .
+#
+# The MCP service connects to the same database and uses the same
+# superset_config.py as the Superset web server.
+#
+# Requirements are pinned in requirements/mcp.txt.
+# Regenerate with: ./scripts/uv-pip-compile.sh
+
+ARG LEAN_IMAGE=apache/superset:latest
+FROM ${LEAN_IMAGE}
+
+ENV SUPERSET_HOME="/app/superset_home"
+
+# Need root to install into the venv
+USER root
+
+# Install MCP-specific requirements on top of the lean base.
+# uv skips packages that are already installed (base.txt deps),
+# so only fastmcp and its unique transitive dependencies are added.
+COPY requirements/mcp.txt requirements/mcp.txt
+RUN --mount=type=cache,target=${SUPERSET_HOME}/.cache/uv \
+    uv pip install --python /app/.venv -r requirements/mcp.txt
+
+USER superset
+
+EXPOSE 5008
+CMD ["superset", "mcp", "run", "--host", "0.0.0.0", "--port", "5008"]

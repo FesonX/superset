@@ -47,6 +47,10 @@ grep --invert-match "./superset-core" requirements/base.txt > requirements/base-
 # Generate the requirements/development.txt file, making sure the base requirements are used as a constraint to keep the versions in sync. Note that `development.txt` is a Superset of `base.txt` where version for the shared libs should match their version.
 uv pip compile requirements/development.in -c requirements/base-constraint.txt -o requirements/development.txt $ADDITIONAL_ARGS
 
+# Generate the requirements/mcp.txt file — base Superset deps + fastmcp only.
+# Used by Dockerfile.mcp to build the MCP service image.
+uv pip compile requirements/mcp.in -c requirements/base-constraint.txt -o requirements/mcp.txt $ADDITIONAL_ARGS
+
 # Remove temporary base requirement file
 rm requirements/base-constraint.txt
 

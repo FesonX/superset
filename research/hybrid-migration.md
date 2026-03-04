@@ -263,19 +263,58 @@ by email from the Google OAuth token — if the user record doesn't exist, auth 
 
 ## Building the Image
 
-MCP is not in any released Superset version. Build from master:
+MCP is not in any released Superset version. Build from master.
+
+The repo includes `Dockerfile.mcp` — a dedicated image for the MCP service.
+It builds on top of the standard `lean` image and adds only `fastmcp` and its
+dependencies (pinned in `requirements/mcp.txt`).
 
 ```bash
 git clone https://github.com/apache/superset.git
 cd superset
 git checkout master  # or pin to a specific commit SHA
 
+SHA=$(git rev-parse --short HEAD)
+
+# Step 1 — build the lean base (Superset web server image, no fastmcp)
 docker build \
   --target lean \
-  -t your-registry/superset:mcp-master-$(date +%Y%m%d) \
+  -t your-registry/superset:lean-${SHA} \
   -f Dockerfile .
 
-docker push your-registry/superset:mcp-master-$(date +%Y%m%d)
+# Step 2 — build the MCP image on top (adds fastmcp from requirements/mcp.txt)
+docker build \
+  -f Dockerfile.mcp \
+  --build-arg LEAN_IMAGE=your-registry/superset:lean-${SHA} \
+  -t your-registry/superset:mcp-${SHA} .
+
+docker push your-registry/superset:lean-${SHA}
+docker push your-registry/superset:mcp-${SHA}
+```
+
+Both images are built from the same commit. The lean image is used for the
+web server; the MCP image is used for the MCP service deployment.
+
+**Quick local verification** (skips the 20-min frontend build):
+
+```bash
+# Use the existing docker-compose dev image as a lean proxy
+docker build \
+  -f Dockerfile.mcp \
+  --build-arg LEAN_IMAGE=superset-superset:latest \
+  -t superset:mcp-test \
+  .
+
+# Verify fastmcp is installed in the right venv
+docker run --rm superset:mcp-test \
+  python -c "import fastmcp; print('fastmcp', fastmcp.__version__)"
+# Expected: fastmcp 2.14.3
+```
+
+To update `requirements/mcp.txt` after changing `pyproject.toml`:
+
+```bash
+./scripts/uv-pip-compile.sh
 ```
 
 Pin to a specific commit SHA for reproducible builds — do not use `latest`.
