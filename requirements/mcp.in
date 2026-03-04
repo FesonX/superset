@@ -20,3 +20,4 @@
 # Used by Dockerfile.mcp to build the MCP service image.
 # Generated: ./scripts/uv-pip-compile.sh
 -e .[fastmcp]
+psycopg2-binary
