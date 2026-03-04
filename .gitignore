@@ -137,3 +137,8 @@ PROJECT.md
 oxc-custom-build/
 *.code-workspace
 *.duckdb
+
+# Local research and session notes
+research/
+production-deploy-test.txt
+prompts.txt
